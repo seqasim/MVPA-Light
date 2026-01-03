@@ -1,0 +1,11 @@
+# MATLAB autosave files
+*.asv
+
+# Mac system files
+.DS_Store
+
+# MATLAB generated files
+*.mex*
+*.mexa64
+*.mexmaci64
+*.mexw64

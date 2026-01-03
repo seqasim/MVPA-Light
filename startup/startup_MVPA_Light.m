@@ -17,3 +17,9 @@ addpath(fullfile(MVPA_path,'utils'));
 % uncomment for running the unittests
 addpath(fullfile(MVPA_path,'simulation'));
 addpath(fullfile(MVPA_path,'unittests'));
+
+% Project-specific scripts (added by seqasim)
+projects_path = fullfile(MVPA_path, 'projects');
+if exist(projects_path, 'dir')
+    addpath(genpath(projects_path));
+end
