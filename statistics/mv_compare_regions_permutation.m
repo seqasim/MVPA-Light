@@ -407,8 +407,19 @@ results.reference_roi = opts.reference_roi;
 results.params = struct('nPerm', opts.nPerm, 't_thresh', opts.t_thresh, ...
     'alpha', opts.alpha);
 
+%% --- PLOT AESTHETICS CONFIGURATION ---
+plot_cfg = struct();
+plot_cfg.font_name = 'Arial';
+plot_cfg.font_size_label = 12;
+plot_cfg.font_size_tick = 10;
+plot_cfg.tick_dir = 'out';
+plot_cfg.line_width = 1;
+plot_cfg.tick_length = [0.025 0.025];
+
 %% Visualization
 fig_heatmap = figure('Position', [100 100 1200 400]);
+set(fig_heatmap, 'Color', 'w');
+set(fig_heatmap, 'Renderer', 'painters');
 
 n_plots = sum(~isnan(pairwise.cluster_p));
 plot_idx = 1;
@@ -556,6 +567,139 @@ if n_valid > 0
     box on;
     grid on;
     set(gca, 'GridAlpha', 0.3);
+end
+
+%% ACC-dmPFC Correlation Analysis
+fprintf('\n=== ACC-dmPFC Cluster Strength Correlation ===\n');
+
+% Find indices for ACC and dmPFC
+acc_idx = find(strcmp(ROIs, 'ACC'));
+dmpfc_idx = find(strcmp(ROIs, 'dmPFC'));
+
+% Check if both ROIs are available
+if isempty(acc_idx) || isempty(dmpfc_idx)
+    fprintf('ACC or dmPFC not in ROI list. Skipping correlation analysis.\n');
+else
+    % Load ACC and dmPFC data
+    acc_fname = fullfile(output_dir, 'ACC_all_acc_subjects.mat');
+    dmpfc_fname = fullfile(output_dir, 'dmPFC_all_acc_subjects.mat');
+    
+    if ~exist(acc_fname, 'file') || ~exist(dmpfc_fname, 'file')
+        fprintf('ACC or dmPFC data files not found. Skipping correlation analysis.\n');
+    else
+        acc_data = load(acc_fname);
+        dmpfc_data = load(dmpfc_fname);
+        
+        % Check for significant clusters
+        if ~isfield(acc_data, 'sig_mask_final') || ~isfield(dmpfc_data, 'sig_mask_final')
+            fprintf('Significant cluster masks not found. Skipping correlation analysis.\n');
+        else
+            acc_sig_mask = acc_data.sig_mask_final;
+            dmpfc_sig_mask = dmpfc_data.sig_mask_final;
+            
+            if ~any(acc_sig_mask(:)) || ~any(dmpfc_sig_mask(:))
+                fprintf('ACC or dmPFC has no significant clusters. Skipping correlation analysis.\n');
+            else
+                % Find subjects present in both ROIs
+                if isfield(acc_data, 'subj_ids') && isfield(dmpfc_data, 'subj_ids')
+                    acc_subj_ids = acc_data.subj_ids;
+                    dmpfc_subj_ids = dmpfc_data.subj_ids;
+                    [common_subjs, acc_idx_subj, dmpfc_idx_subj] = intersect(acc_subj_ids, dmpfc_subj_ids);
+                else
+                    % Fallback: assume aligned by index
+                    n_common = min(size(acc_data.all_acc, 3), size(dmpfc_data.all_acc, 3));
+                    common_subjs = cell(n_common, 1);
+                    for i = 1:n_common
+                        common_subjs{i} = sprintf('Subj%d', i);
+                    end
+                    acc_idx_subj = 1:n_common;
+                    dmpfc_idx_subj = 1:n_common;
+                end
+                
+                if numel(common_subjs) < 3
+                    fprintf('Less than 3 subjects have both ACC and dmPFC data. Skipping correlation.\n');
+                else
+                    fprintf('Found %d subjects with both ACC and dmPFC data\n', numel(common_subjs));
+                    
+                    % Compute cluster strength for each subject in each ROI
+                    acc_strength = zeros(numel(common_subjs), 1);
+                    dmpfc_strength = zeros(numel(common_subjs), 1);
+                    chance = 1/3;
+                    
+                    for i = 1:numel(common_subjs)
+                        % ACC cluster strength (mean accuracy within significant cluster)
+                        acc_subj_acc = acc_data.all_acc(:,:,acc_idx_subj(i));
+                        acc_strength(i) = mean(acc_subj_acc(acc_sig_mask)) - chance;  % Effect size
+                        
+                        % dmPFC cluster strength
+                        dmpfc_subj_acc = dmpfc_data.all_acc(:,:,dmpfc_idx_subj(i));
+                        dmpfc_strength(i) = mean(dmpfc_subj_acc(dmpfc_sig_mask)) - chance;  % Effect size
+                    end
+                    
+                    % Compute correlation
+                    [r, p] = corr(acc_strength, dmpfc_strength, 'Type', 'Pearson');
+                    fprintf('  Pearson r = %.4f, p = %.4f\n', r, p);
+                    fprintf('  N = %d subjects\n', numel(common_subjs));
+                    
+                    % Create scatter plot
+                    fig_scatter = figure('Position', [100 100 500 450]);
+                    set(fig_scatter, 'Color', 'w');
+                    set(fig_scatter, 'Renderer', 'painters');
+                    
+                    scatter(acc_strength, dmpfc_strength, 80, 'filled', 'MarkerFaceColor', [0.3 0.5 0.8], ...
+                        'MarkerEdgeColor', 'k', 'LineWidth', plot_cfg.line_width);
+                    hold on;
+                    
+                    % Add regression line if correlation is significant
+                    if p < 0.05
+                        % Fit linear regression
+                        p_fit = polyfit(acc_strength, dmpfc_strength, 1);
+                        x_fit = linspace(min(acc_strength), max(acc_strength), 100);
+                        y_fit = polyval(p_fit, x_fit);
+                        plot(x_fit, y_fit, 'r-', 'LineWidth', 2);
+                        
+                        % Add text annotation with stats
+                        text(0.05, 0.95, sprintf('r = %.3f\np = %.3f', r, p), ...
+                            'Units', 'normalized', 'FontName', plot_cfg.font_name, ...
+                            'FontSize', plot_cfg.font_size_tick, 'VerticalAlignment', 'top', ...
+                            'BackgroundColor', 'w', 'EdgeColor', 'k', 'LineWidth', plot_cfg.line_width);
+                    else
+                        % Still show correlation even if not significant
+                        text(0.05, 0.95, sprintf('r = %.3f\np = %.3f (n.s.)', r, p), ...
+                            'Units', 'normalized', 'FontName', plot_cfg.font_name, ...
+                            'FontSize', plot_cfg.font_size_tick, 'VerticalAlignment', 'top', ...
+                            'BackgroundColor', 'w', 'EdgeColor', 'k', 'LineWidth', plot_cfg.line_width);
+                    end
+                    
+                    % Axis labels and styling
+                    xlabel('ACC Reactivation Strength', 'FontName', plot_cfg.font_name, 'FontSize', plot_cfg.font_size_label);
+                    ylabel('dmPFC Reactivation Strength', 'FontName', plot_cfg.font_name, 'FontSize', plot_cfg.font_size_label);
+                    title('Cross-ROI Reactivation Correlation', 'FontName', plot_cfg.font_name, 'FontSize', plot_cfg.font_size_label + 2);
+                    
+                    set(gca, 'FontName', plot_cfg.font_name, 'FontSize', plot_cfg.font_size_tick);
+                    set(gca, 'TickDir', plot_cfg.tick_dir);
+                    set(gca, 'LineWidth', plot_cfg.line_width);
+                    set(gca, 'TickLength', plot_cfg.tick_length);
+                    box off;
+                    grid on;
+                    grid minor;
+                    set(gca, 'GridAlpha', 0.3);
+                    hold off;
+                    
+                    % Save figure
+                    scatter_file = fullfile(output_dir, 'ACC_dmPFC_correlation.pdf');
+                    print(fig_scatter, scatter_file, '-dpdf', '-r300');
+                    fprintf('Correlation plot saved to: %s\n', scatter_file);
+                    
+                    % Save correlation data
+                    corr_table = table(common_subjs(:), acc_strength, dmpfc_strength, ...
+                        'VariableNames', {'Subject', 'ACC_ReactivationStrength', 'dmPFC_ReactivationStrength'});
+                    writetable(corr_table, fullfile(output_dir, 'ACC_dmPFC_correlation_data.csv'));
+                    fprintf('Correlation data saved to: %s\n', fullfile(output_dir, 'ACC_dmPFC_correlation_data.csv'));
+                end
+            end
+        end
+    end
 end
 
 %% Save results
